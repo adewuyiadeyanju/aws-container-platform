@@ -74,6 +74,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Debug GitHub OIDC claims
+        shell: bash
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Actor: ${{ github.actor }}"
+
+          TOKEN=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" \
+            | jq -r '.value')
+
+          PAYLOAD=$(echo "$TOKEN" | cut -d '.' -f2 | tr '_-' '/+' | base64 -d 2>/dev/null)
+
+          echo "OIDC claims:"
+          echo "$PAYLOAD" | jq '{
+            iss,
+            aud,
+            sub,
+            repository,
+            ref,
+            event_name
+          }'
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
