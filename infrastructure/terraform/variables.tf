@@ -16,10 +16,28 @@ variable "environment" {
   default     = "dev"
 }
 
-variable "github_repository" {
-  description = "GitHub repository allowed to assume the GitHub Actions IAM role."
+variable "github_repository_owner" {
+  description = "Github repository owner's username."
   type        = string
-  default     = "adewuyiadeyanju/aws-container-platform"
+  default     = "adewuyiadeyanju"
+}
+
+variable "github_repository_name" {
+  description = "Github repository name."
+  type        = string
+  default     = "aws-container-platform"
+}
+
+variable "github_owner_id" {
+  description = "Immutable GitHub owner ID used in OIDC subject claims."
+  type        = string
+  default     = "299310860"
+}
+
+variable "github_repository_id" {
+  description = "Immutable GitHub repository ID used in OIDC subject claims."
+  type        = string
+  default     = "1346002853"
 }
 
 variable "ecr_repository_name" {
