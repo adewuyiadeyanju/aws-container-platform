@@ -66,7 +66,12 @@ data "aws_iam_policy_document" "github_actions_assume_role" {
       variable = "token.actions.githubusercontent.com:sub"
 
       values = [
-        "repo:${var.github_repository_owner}/${var.github_repository_name}:*"
+        # Standard GitHub OIDC subject format
+        "repo:${var.github_repository_owner}/${var.github_repository_name}:*",
+
+        # Immutable GitHub OIDC subject format (owner/repository IDs)
+        # used by repositories that have opted into immutable subjects.
+        "repo:${var.github_repository_owner}@${var.github_owner_id}/${var.github_repository_name}@${var.github_repository_id}:*"
       ]
     }
   }
