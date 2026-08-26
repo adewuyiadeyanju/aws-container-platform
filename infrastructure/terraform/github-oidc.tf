@@ -2,6 +2,9 @@
 # GitHub Actions OIDC Provider
 # ============================================================
 
+# GitHub's OIDC endpoint is used by GitHub Actions to obtain
+# short-lived AWS credentials without storing AWS access keys.
+
 data "tls_certificate" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
@@ -24,9 +27,18 @@ resource "aws_iam_openid_connect_provider" "github" {
 # ============================================================
 # GitHub Actions Assume Role Policy
 # ============================================================
+#
+# IMPORTANT:
+# The subject is restricted to this GitHub repository, but not
+# to one specific branch/environment. This is intentional because
+# GitHub changes the OIDC sub claim for pull requests and for jobs
+# that use GitHub Environments. Restricting it to the repository
+# prevents other repositories from assuming this role while still
+# allowing the CI/CD workflow's Plan, Apply and Verify jobs to
+# re-assume the role.
+#
 
 data "aws_iam_policy_document" "github_actions_assume_role" {
-
   statement {
     sid     = "GitHubActionsOIDC"
     effect  = "Allow"
@@ -54,7 +66,7 @@ data "aws_iam_policy_document" "github_actions_assume_role" {
       variable = "token.actions.githubusercontent.com:sub"
 
       values = [
-        "repo:${var.github_repository_name}:ref:refs/heads/main"
+        "repo:${var.github_repository_owner}/${var.github_repository_name}:*"
       ]
     }
   }
@@ -80,58 +92,61 @@ resource "aws_iam_role" "github_actions" {
 
 
 # ============================================================
-# GitHub Actions ECR Policy
-# Used by CI/CD to authenticate and push Docker images.
+# Consolidated GitHub Actions Permissions
 # ============================================================
+#
+# This replaces the previous separate:
+#   - github_actions_ecr
+#   - github_actions_terraform
+#   - github_actions_terraform_state
+# policies with one Terraform-managed policy.
+#
+# The policy contains permissions required by:
+#   1. Terraform backend (S3)
+#   2. Terraform infrastructure management
+#   3. Docker image push/pull to ECR
+#   4. ECS deployment
+#   5. Verify Deployment workflow steps
+#
 
-data "aws_iam_policy_document" "github_actions_ecr" {
+data "aws_iam_policy_document" "github_actions_permissions" {
+
+  # ----------------------------------------------------------
+  # Terraform S3 Backend
+  # ----------------------------------------------------------
 
   statement {
-    sid    = "ECRAuthentication"
+    sid    = "TerraformStateBucket"
     effect = "Allow"
 
     actions = [
-      "ecr:GetAuthorizationToken"
-    ]
-
-    resources = ["*"]
-  }
-
-  statement {
-    sid    = "ECRPushPull"
-    effect = "Allow"
-
-    actions = [
-      "ecr:BatchCheckLayerAvailability",
-      "ecr:BatchGetImage",
-      "ecr:CompleteLayerUpload",
-      "ecr:InitiateLayerUpload",
-      "ecr:PutImage",
-      "ecr:UploadLayerPart"
+      "s3:GetBucketLocation",
+      "s3:GetBucketVersioning",
+      "s3:ListBucket"
     ]
 
     resources = [
-      aws_ecr_repository.fieldops.arn
+      "arn:aws:s3:::${var.tfstate_bucket_name}"
     ]
   }
-}
 
-resource "aws_iam_role_policy" "github_actions_ecr" {
-  name = "${local.name_prefix}-github-actions-ecr"
-  role = aws_iam_role.github_actions.id
+  statement {
+    sid    = "TerraformStateObjects"
+    effect = "Allow"
 
-  policy = data.aws_iam_policy_document.github_actions_ecr.json
-}
+    actions = [
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:PutObject"
+    ]
 
+    resources = [
+      "arn:aws:s3:::${var.tfstate_bucket_name}/*"
+    ]
+  }
 
-# ============================================================
-# Terraform Management Policy
-#
-# This is the consolidated permanent policy used by GitHub
-# Actions when Terraform manages the AWS infrastructure.
-# ============================================================
-
-data "aws_iam_policy_document" "github_actions_terraform" {
 
   # ----------------------------------------------------------
   # EC2 / VPC / Networking
@@ -142,18 +157,21 @@ data "aws_iam_policy_document" "github_actions_terraform" {
     effect = "Allow"
 
     actions = [
-      # Read
+      # Read / discovery
       "ec2:DescribeAddresses",
       "ec2:DescribeAddressesAttribute",
-      "ec2:DescribeVpcAttribute",
-      "ec2:DescribeVpcs",
-      "ec2:DescribeTags",
-      "ec2:DescribeSubnets",
-      "ec2:DescribeRouteTables",
-      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeAvailabilityZones",
+      "ec2:DescribeInstances",
       "ec2:DescribeInternetGateways",
       "ec2:DescribeNatGateways",
       "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeRouteTables",
+      "ec2:DescribeSecurityGroupRules",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeTags",
+      "ec2:DescribeVpcAttribute",
+      "ec2:DescribeVpcs",
 
       # VPC
       "ec2:CreateVpc",
@@ -195,7 +213,8 @@ data "aws_iam_policy_document" "github_actions_terraform" {
       "ec2:RevokeSecurityGroupEgress",
 
       # Tags
-      "ec2:CreateTags"
+      "ec2:CreateTags",
+      "ec2:DeleteTags"
     ]
 
     resources = ["*"]
@@ -249,7 +268,7 @@ data "aws_iam_policy_document" "github_actions_terraform" {
     effect = "Allow"
 
     actions = [
-      # Read
+      # Read / discovery
       "elasticloadbalancing:DescribeLoadBalancers",
       "elasticloadbalancing:DescribeLoadBalancerAttributes",
       "elasticloadbalancing:DescribeTargetGroups",
@@ -343,13 +362,10 @@ data "aws_iam_policy_document" "github_actions_terraform" {
     actions = [
       "logs:DescribeLogGroups",
       "logs:ListTagsForResource",
-
       "logs:CreateLogGroup",
       "logs:DeleteLogGroup",
-
       "logs:PutRetentionPolicy",
       "logs:DeleteRetentionPolicy",
-
       "logs:TagResource"
     ]
 
@@ -358,27 +374,35 @@ data "aws_iam_policy_document" "github_actions_terraform" {
 
 
   # ----------------------------------------------------------
-  # ECR
+  # ECR - Terraform repository management + Docker push/pull
   # ----------------------------------------------------------
+
+  statement {
+    sid    = "ECRAuthentication"
+    effect = "Allow"
+
+    actions = [
+      "ecr:GetAuthorizationToken"
+    ]
+
+    resources = ["*"]
+  }
 
   statement {
     sid    = "TerraformECR"
     effect = "Allow"
 
     actions = [
+      # Terraform repository discovery / management
       "ecr:DescribeRepositories",
       "ecr:ListTagsForResource",
       "ecr:GetRepositoryPolicy",
-
       "ecr:CreateRepository",
       "ecr:DeleteRepository",
-
       "ecr:SetRepositoryPolicy",
       "ecr:DeleteRepositoryPolicy",
-
       "ecr:PutImageTagMutability",
       "ecr:PutImageScanningConfiguration",
-
       "ecr:TagResource",
       "ecr:UntagResource"
     ]
@@ -386,16 +410,32 @@ data "aws_iam_policy_document" "github_actions_terraform" {
     resources = ["*"]
   }
 
+  statement {
+    sid    = "ECRPushPull"
+    effect = "Allow"
+
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:CompleteLayerUpload",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:InitiateLayerUpload",
+      "ecr:PutImage",
+      "ecr:UploadLayerPart"
+    ]
+
+    resources = [
+      aws_ecr_repository.fieldops.arn
+    ]
+  }
+
 
   # ----------------------------------------------------------
   # IAM
-  #
-  # Required because Terraform manages:
-  # - ECS task roles
-  # - ECS execution role
-  # - GitHub Actions role
-  # - GitHub OIDC provider
-  # - inline IAM policies
+  # ----------------------------------------------------------
+  # Terraform manages the ECS task roles, execution role,
+  # GitHub Actions role, GitHub OIDC provider and inline IAM
+  # policies.
   # ----------------------------------------------------------
 
   statement {
@@ -438,10 +478,37 @@ data "aws_iam_policy_document" "github_actions_terraform" {
 
 
   # ----------------------------------------------------------
+  # IAM service-linked roles
+  # ----------------------------------------------------------
+  # Allows Terraform to create AWS service-linked roles if they
+  # do not already exist for ECS, ELB or RDS.
+  # ----------------------------------------------------------
+
+  statement {
+    sid    = "TerraformServiceLinkedRoles"
+    effect = "Allow"
+
+    actions = [
+      "iam:CreateServiceLinkedRole"
+    ]
+
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+
+      values = [
+        "ecs.amazonaws.com",
+        "elasticloadbalancing.amazonaws.com",
+        "rds.amazonaws.com"
+      ]
+    }
+  }
+
+
+  # ----------------------------------------------------------
   # IAM PassRole
-  #
-  # Terraform must be able to associate the ECS task and
-  # execution roles with the ECS task definition.
   # ----------------------------------------------------------
 
   statement {
@@ -461,57 +528,12 @@ data "aws_iam_policy_document" "github_actions_terraform" {
 
 
 # ============================================================
-# Attach Terraform Management Policy
+# Attach Consolidated GitHub Actions Policy
 # ============================================================
 
 resource "aws_iam_role_policy" "github_actions_terraform" {
   name = "${local.name_prefix}-github-actions-terraform"
   role = aws_iam_role.github_actions.id
 
-  policy = data.aws_iam_policy_document.github_actions_terraform.json
-}
-
-
-# ============================================================
-# Terraform S3 Backend State Policy
-# ============================================================
-
-data "aws_iam_policy_document" "github_actions_terraform_state" {
-
-  statement {
-    sid    = "TerraformStateBucket"
-    effect = "Allow"
-
-    actions = [
-      "s3:ListBucket",
-      "s3:GetBucketLocation"
-    ]
-
-    resources = [
-      "arn:aws:s3:::${var.tfstate_bucket_name}"
-    ]
-  }
-
-  statement {
-    sid    = "TerraformStateObjects"
-    effect = "Allow"
-
-    actions = [
-      "s3:GetObject",
-      "s3:PutObject",
-      "s3:DeleteObject"
-    ]
-
-    resources = [
-      "arn:aws:s3:::${var.tfstate_bucket_name}/*"
-    ]
-  }
-}
-
-
-resource "aws_iam_role_policy" "github_actions_terraform_state" {
-  name = "${local.name_prefix}-github-actions-terraform-state"
-  role = aws_iam_role.github_actions.id
-
-  policy = data.aws_iam_policy_document.github_actions_terraform_state.json
+  policy = data.aws_iam_policy_document.github_actions_permissions.json
 }
