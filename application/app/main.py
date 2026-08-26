@@ -45,8 +45,14 @@ def database_health_check():
             "database": "connected",
         }
 
-    except Exception:
+    except Exception as exc:
+        print(
+            f"Database health check failed: "
+            f"{type(exc).__name__}: {exc!r}"
+        )
+
         return {
             "status": "unhealthy",
             "database": "unavailable",
+            "error": f"{type(exc).__name__}: {exc}",
         }

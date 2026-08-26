@@ -24,11 +24,12 @@ resource "aws_ecs_task_definition" "fieldops" {
   memory                   = "512"
 
   execution_role_arn = aws_iam_role.ecs_task_execution.arn
+  task_role_arn      = aws_iam_role.ecs_task.arn
 
   container_definitions = jsonencode([
     {
       name      = "fieldops-api"
-      image     = "${aws_ecr_repository.fieldops.repository_url}:6061688102de15537dd42ccb832f630adb9f80c9"
+      image     = "${aws_ecr_repository.fieldops.repository_url}:630af8cf1657cb271483e690c64b0a1bce170f15"
       essential = true
 
       portMappings = [
@@ -52,16 +53,16 @@ resource "aws_ecs_task_definition" "fieldops" {
           name  = "DATABASE_NAME"
           value = "fieldops"
         },
-        {
-          name  = "DATABASE_USERNAME"
-          value = "fieldops"
-        }
       ]
 
       secrets = [
         {
+          name      = "DATABASE_USERNAME"
+          valueFrom = "${aws_db_instance.main.master_user_secret[0].secret_arn}:username::"
+        },
+        {
           name      = "DATABASE_PASSWORD"
-          valueFrom = aws_db_instance.main.master_user_secret[0].secret_arn
+          valueFrom = "${aws_db_instance.main.master_user_secret[0].secret_arn}:password::"
         }
       ]
 
@@ -90,6 +91,8 @@ resource "aws_ecs_service" "fieldops" {
   desired_count = 2
   launch_type   = "FARGATE"
 
+  enable_execute_command = true
+
   load_balancer {
     target_group_arn = aws_lb_target_group.fieldops.arn
     container_name   = "fieldops-api"
@@ -114,6 +117,7 @@ resource "aws_ecs_service" "fieldops" {
   }
 
   depends_on = [
-    aws_iam_role_policy_attachment.ecs_task_execution
+    aws_iam_role_policy_attachment.ecs_task_execution,
+    aws_iam_role_policy.ecs_task_exec
   ]
 }
