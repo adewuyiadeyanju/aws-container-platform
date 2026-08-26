@@ -51,3 +51,9 @@ variable "image_tag" {
   type        = string
   default     = "latest"
 }
+
+variable "tfstate_bucket_name" {
+  description = "Terraform State Bucket name"
+  type        = string
+  default     = "aws-container-platform-dev-tfstate-506813471880"
+}
