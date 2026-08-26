@@ -29,7 +29,7 @@ resource "aws_ecs_task_definition" "fieldops" {
   container_definitions = jsonencode([
     {
       name      = "fieldops-api"
-      image     = "${aws_ecr_repository.fieldops.repository_url}:630af8cf1657cb271483e690c64b0a1bce170f15"
+      image     = "${aws_ecr_repository.fieldops.repository_url}:${var.image_tag}"
       essential = true
 
       portMappings = [

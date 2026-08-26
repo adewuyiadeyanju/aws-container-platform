@@ -45,3 +45,9 @@ variable "ecr_repository_name" {
   type        = string
   default     = "fieldops-api"
 }
+
+variable "image_tag" {
+  description = "Docker image tag to deploy"
+  type        = string
+  default     = "latest"
+}
